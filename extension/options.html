@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Controlium — Options</title>
+  <style>
+    body { font: 14px -apple-system, system-ui, sans-serif; max-width: 620px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 20px; }
+    .card { border: 1px solid #e2e2e2; border-radius: 10px; padding: 18px; margin: 16px 0; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input[type=number] { width: 120px; font: inherit; padding: 5px; }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+    .on { background: #2e7d32; } .off { background: #c62828; }
+    button { font: inherit; padding: 7px 14px; border: 1px solid #ccc; border-radius: 7px; background: #f6f6f6; cursor: pointer; margin-top: 12px; }
+    code { background: #f0f0f0; padding: 1px 5px; border-radius: 4px; }
+    .muted { color: #777; }
+    ol { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>Controlium</h1>
+  <div class="card">
+    <div><span id="dot" class="dot off"></span><b id="status">Disconnected</b></div>
+    <label for="ports">Bridge WebSocket ports (comma-separated)</label>
+    <input id="ports" type="text" placeholder="8765, 8766" style="width:220px" />
+    <div class="muted" style="margin-top:6px">The extension connects to all of these at once, so different MCP hosts (e.g. Claude Code on 8765, Claude Desktop on 8766) can each drive it — one at a time.</div>
+    <label><input id="autofocus" type="checkbox" /> Bring the working tab to the front of Chrome on every action</label>
+    <div class="muted" style="margin-top:6px">When on, the tab Claude is acting on becomes the active, visible tab and its window is focused.</div>
+    <label><input id="showcursor" type="checkbox" /> Show a synthetic cursor and click ripples on the page</label>
+    <div class="muted" style="margin-top:6px">A visible pointer animates to each click so you can watch Claude work (also appears in screenshots).</div>
+    <div><button id="reconnect">Save &amp; reconnect</button></div>
+  </div>
+  <div class="card">
+    <h3>Setup</h3>
+    <ol>
+      <li>Run the MCP bridge (Claude Code launches it automatically once added via <code>claude mcp add</code>).</li>
+      <li>Make sure the port above matches the bridge's port (default <code>8765</code>).</li>
+      <li>The status dot turns green when the extension is connected to the bridge.</li>
+    </ol>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
