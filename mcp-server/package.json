@@ -1,0 +1,12 @@
+{
+  "name": "controlium",
+  "version": "1.0.0",
+  "description": "MCP server + WebSocket bridge that lets Claude drive the enhanced Chrome extension (with bring-tab-to-front).",
+  "type": "module",
+  "bin": { "controlium": "server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}
