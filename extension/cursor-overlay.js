@@ -18,14 +18,15 @@
     cursor = document.createElement("div");
     cursor.setAttribute("data-controlium-cursor", "1");
     cursor.style.cssText = [
-      "position:fixed", "left:0", "top:0", "width:22px", "height:22px",
+      "position:fixed", "left:0", "top:0", "width:40px", "height:40px",
       "z-index:2147483647", "pointer-events:none", "will-change:transform",
       "transform:translate(-100px,-100px)",
       "transition:transform .22s cubic-bezier(.22,1,.36,1)",
-      "filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))",
+      // layered glow halo (warm) + a dark drop shadow for contrast on light pages
+      "filter:drop-shadow(0 0 4px rgba(217,119,87,.95)) drop-shadow(0 0 10px rgba(217,119,87,.8)) drop-shadow(0 0 20px rgba(217,119,87,.55)) drop-shadow(0 1px 2px rgba(0,0,0,.55))",
     ].join(";");
     cursor.innerHTML =
-      '<svg width="22" height="22" viewBox="0 0 24 24" xmlns="' + SVG_NS + '">' +
+      '<svg width="40" height="40" viewBox="0 0 24 24" xmlns="' + SVG_NS + '">' +
       '<path d="M3 2 L3 19 L8 14.5 L11.2 21.5 L14 20.3 L10.9 13.5 L18 13.5 Z" ' +
       'fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>';
     document.documentElement.appendChild(cursor);
@@ -40,19 +41,21 @@
 
   function ripple(x, y, color) {
     ensure();
+    const c = color || "#d97757";
     const r = document.createElement("div");
     r.style.cssText = [
       "position:fixed", "left:" + x + "px", "top:" + y + "px",
-      "width:12px", "height:12px", "margin:-6px 0 0 -6px",
-      "border:2px solid " + (color || "#d97757"), "border-radius:50%",
+      "width:16px", "height:16px", "margin:-8px 0 0 -8px",
+      "border:3px solid " + c, "border-radius:50%",
+      "box-shadow:0 0 10px " + c + ", 0 0 18px " + c + ", inset 0 0 8px " + c,
       "z-index:2147483646", "pointer-events:none", "opacity:.95",
-      "transition:width .42s ease-out,height .42s ease-out,margin .42s ease-out,opacity .42s ease-out",
+      "transition:width .45s ease-out,height .45s ease-out,margin .45s ease-out,opacity .45s ease-out",
     ].join(";");
     document.documentElement.appendChild(r);
     requestAnimationFrame(() => {
-      r.style.width = "46px"; r.style.height = "46px"; r.style.margin = "-23px 0 0 -23px"; r.style.opacity = "0";
+      r.style.width = "64px"; r.style.height = "64px"; r.style.margin = "-32px 0 0 -32px"; r.style.opacity = "0";
     });
-    setTimeout(() => r.remove(), 480);
+    setTimeout(() => r.remove(), 500);
   }
 
   function hide() {
