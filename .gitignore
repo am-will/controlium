@@ -1,0 +1,7 @@
+node_modules/
+build/
+research/
+*.mcpb
+*.bak
+*.bak.*
+.DS_Store

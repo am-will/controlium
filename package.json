@@ -1,0 +1,14 @@
+{
+  "name": "controlium",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Enhanced Claude browser-control extension + MCP bridge, with bring-tab-to-front and a synthetic cursor.",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/integration.mjs",
+    "test:live": "node tests/live-e2e.mjs"
+  },
+  "devDependencies": {
+    "ws": "^8.18.0"
+  }
+}
