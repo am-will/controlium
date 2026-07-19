@@ -1,0 +1,24 @@
+{
+  "manifest_version": "0.4",
+  "name": "controlium",
+  "display_name": "Controlium",
+  "version": "1.0.0",
+  "description": "Drive your real Chrome over CDP, bringing the working tab to the front with a synthetic cursor.",
+  "long_description": "Connects Claude Desktop to the Controlium Chrome extension via a local WebSocket bridge. Claude can open tabs, navigate, click, type, screenshot and read pages in your real Chrome — always bringing the working tab to the front and showing a visible cursor. Requires the Controlium extension to be loaded in Chrome. Runs its bridge on port 8766 so it can coexist with a Claude Code instance on 8765.",
+  "icon": "icon.png",
+  "author": {
+    "name": "Controlium"
+  },
+  "keywords": ["browser", "chrome", "automation", "cdp", "controlium"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "CONTROLIUM_PORT": "8766"
+      }
+    }
+  }
+}
