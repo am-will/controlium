@@ -8,17 +8,14 @@
 // tab first brings that tab to the FRONT of Chrome (active tab + focused window),
 // so Claude's working tab is always visible instead of hidden in the background.
 
-const DEFAULT_PORT = 8765;
+const DEFAULT_PORTS = [8765, 8766];
 const CDP_VERSION = "1.3";
 const MAX_BUF = 300;
 const LOAD_TIMEOUT_MS = 30000;
 
-let ws = null;
-let connected = false;
-let connecting = false;
-let reconnectDelay = 1000;
-let reconnectTimer = null;
 let currentTabId = null;
+const conns = new Map();   // port -> { sock, connecting, delay, timer }
+let anyConnected = false;
 
 function dlog(...a) { try { console.log("[controlium]", ...a); } catch (_) {} }
 
@@ -32,12 +29,24 @@ const refMaps = new Map();             // tabId -> Map(refId -> {x,y,tag,text})
 // ---------------------------------------------------------------------------
 
 async function getConfig() {
-  const { port, autoFocus, showCursor } = await chrome.storage.local.get(["port", "autoFocus", "showCursor"]);
+  const { autoFocus, showCursor } = await chrome.storage.local.get(["autoFocus", "showCursor"]);
   return {
-    port: Number(port) || DEFAULT_PORT,
     autoFocus: autoFocus !== false, // default true
     showCursor: showCursor !== false, // default true
   };
+}
+
+// The extension connects to EVERY configured bridge port at once, so different MCP
+// hosts (e.g. Claude Code on 8765, Claude Desktop on 8766) can each drive it — one
+// at a time. Configure the list in the popup/options (comma-separated).
+async function getPorts() {
+  const { ports, port } = await chrome.storage.local.get(["ports", "port"]);
+  let list = [];
+  if (Array.isArray(ports)) list = ports;
+  else if (typeof ports === "string") list = ports.split(",");
+  else if (port != null) list = [port];
+  list = list.map((p) => Number(String(p).trim())).filter((p) => p > 0 && p < 65536);
+  return list.length ? [...new Set(list)] : DEFAULT_PORTS.slice();
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,69 +69,74 @@ async function cursorSignal(tabId, action, x, y) {
 // WebSocket connection to the MCP bridge
 // ---------------------------------------------------------------------------
 
-async function connect() {
-  clearTimeout(reconnectTimer);
-  if (connecting) return;
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  connecting = true;
+// Open (and keep open) a connection to every configured port.
+async function connectAll() {
+  const ports = await getPorts();
+  for (const p of ports) {
+    if (!conns.has(p)) conns.set(p, { sock: null, connecting: false, delay: 1000, timer: null });
+    connectPort(p);
+  }
+}
 
-  const { port } = await getConfig();
-  dlog("connecting to ws://127.0.0.1:" + port);
+function connectPort(p) {
+  const c = conns.get(p);
+  if (!c) return;
+  clearTimeout(c.timer);
+  if (c.connecting) return;
+  if (c.sock && (c.sock.readyState === WebSocket.OPEN || c.sock.readyState === WebSocket.CONNECTING)) return;
+  c.connecting = true;
+
   let sock;
   try {
-    sock = new WebSocket(`ws://127.0.0.1:${port}`);
+    sock = new WebSocket(`ws://127.0.0.1:${p}`);
   } catch (e) {
-    connecting = false;
-    dlog("WebSocket construct failed:", e && e.message);
-    scheduleReconnect();
+    c.connecting = false;
+    scheduleReconnectPort(p);
     return;
   }
-  ws = sock;
+  c.sock = sock;
 
   sock.onopen = () => {
-    connected = true;
-    connecting = false;
-    reconnectDelay = 1000;
-    dlog("connected to bridge");
+    c.connecting = false;
+    c.delay = 1000;
+    dlog("connected to bridge on :" + p);
     try {
-      sock.send(JSON.stringify({
-        type: "hello",
-        role: "extension",
-        version: chrome.runtime.getManifest().version,
-      }));
+      sock.send(JSON.stringify({ type: "hello", role: "extension", version: chrome.runtime.getManifest().version }));
     } catch (_) {}
-    updateBadge();
+    updateAnyConnected();
   };
 
-  sock.onmessage = (ev) => handleMessage(ev.data);
+  sock.onmessage = (ev) => handleMessage(ev.data, sock);
 
   sock.onclose = () => {
-    connected = false;
-    connecting = false;
-    if (ws === sock) ws = null;
-    dlog("bridge connection closed");
-    updateBadge();
-    scheduleReconnect();
+    c.connecting = false;
+    if (c.sock === sock) c.sock = null;
+    updateAnyConnected();
+    scheduleReconnectPort(p);
   };
 
-  sock.onerror = (e) => {
-    dlog("bridge connection error");
-    try { sock.close(); } catch (_) {}
-  };
+  sock.onerror = () => { try { sock.close(); } catch (_) {} };
 }
 
-function scheduleReconnect() {
-  clearTimeout(reconnectTimer);
-  reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
-  reconnectTimer = setTimeout(connect, reconnectDelay);
+function scheduleReconnectPort(p) {
+  const c = conns.get(p);
+  if (!c) return;
+  clearTimeout(c.timer);
+  c.delay = Math.min(c.delay * 1.5, 15000);
+  c.timer = setTimeout(() => connectPort(p), c.delay);
 }
 
-async function handleMessage(data) {
+function updateAnyConnected() {
+  anyConnected = [...conns.values()].some((c) => c.sock && c.sock.readyState === WebSocket.OPEN);
+  updateBadge();
+}
+
+async function handleMessage(data, sock) {
   let msg;
   try { msg = JSON.parse(data); } catch (_) { return; }
 
   if (msg.type === "ping") {
-    safeSend({ type: "pong" });
+    safeSend(sock, { type: "pong" });
     return;
   }
   if (msg.type === "call") {
@@ -134,20 +148,20 @@ async function handleMessage(data) {
     } catch (e) {
       resp = { type: "result", id, ok: false, error: errStr(e) };
     }
-    safeSend(resp);
+    safeSend(sock, resp);
   }
 }
 
-function safeSend(obj) {
+function safeSend(sock, obj) {
   try {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    if (sock && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(obj));
   } catch (_) {}
 }
 
 function updateBadge() {
   try {
-    chrome.action.setBadgeText({ text: connected ? "on" : "" });
-    chrome.action.setBadgeBackgroundColor({ color: connected ? "#2e7d32" : "#9e9e9e" });
+    chrome.action.setBadgeText({ text: anyConnected ? "on" : "" });
+    chrome.action.setBadgeBackgroundColor({ color: anyConnected ? "#2e7d32" : "#9e9e9e" });
   } catch (_) {}
 }
 
@@ -674,24 +688,27 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (currentTabId === tabId) currentTabId = null;
 });
 
-chrome.runtime.onInstalled.addListener(() => { connect(); });
-chrome.runtime.onStartup.addListener(() => { connect(); });
+chrome.runtime.onInstalled.addListener(() => { connectAll(); });
+chrome.runtime.onStartup.addListener(() => { connectAll(); });
 
 // Reconnect backstop: alarms also wake the SW if it was suspended.
 chrome.alarms.create("bridge-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "bridge-keepalive" && !connected) connect();
+  if (a.name === "bridge-keepalive") connectAll();
 });
 
 // Popup / options can ask for status and trigger a reconnect.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "GET_STATUS") {
-    getConfig().then((cfg) => sendResponse({ connected, port: cfg.port, autoFocus: cfg.autoFocus, showCursor: cfg.showCursor, currentTabId }));
+    Promise.all([getConfig(), getPorts()]).then(([cfg, ports]) => {
+      const openPorts = [...conns.entries()].filter(([, c]) => c.sock && c.sock.readyState === WebSocket.OPEN).map(([p]) => p);
+      sendResponse({ connected: anyConnected, ports, openPorts, autoFocus: cfg.autoFocus, showCursor: cfg.showCursor, currentTabId });
+    });
     return true;
   }
-  if (msg && msg.type === "RECONNECT") { connect(); sendResponse({ ok: true }); return true; }
+  if (msg && msg.type === "RECONNECT") { connectAll(); sendResponse({ ok: true }); return true; }
   return false;
 });
 
-connect();
+connectAll();
 updateBadge();
