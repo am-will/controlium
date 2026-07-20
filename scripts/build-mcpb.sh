@@ -14,6 +14,7 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/server"
 cp "$DIR/desktop-extension/manifest.json" "$STAGE/manifest.json"
 cp "$DIR/extension/icon-128.png" "$STAGE/icon.png"
 cp "$DIR/mcp-server/server.js" "$STAGE/server/index.js"
+cp "$DIR/mcp-server/bridge.js" "$STAGE/server/bridge.js"
 cp -R "$DIR/mcp-server/node_modules" "$STAGE/server/node_modules"
 cat > "$STAGE/server/package.json" <<'JSON'
 {

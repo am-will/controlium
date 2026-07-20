@@ -1,82 +1,91 @@
 #!/usr/bin/env node
-// Controlium — MCP server (stdio) + WebSocket bridge.
+// Controlium — MCP server (stdio), a thin client of the shared bridge daemon.
 //
-// Claude Code launches this over stdio (via `claude mcp add`). It exposes browser
-// tools over MCP, and hosts a localhost WebSocket server that the Chrome extension
-// connects to. Tool calls are forwarded to the extension, which executes them via
-// the DevTools Protocol and returns the result.
+// Claude (Code / Desktop) launches this over stdio. Instead of hosting its own
+// WebSocket server (which collided when several Claude apps ran at once), it
+// connects to a single shared daemon (bridge.js) that owns the port and the one
+// connection to the Chrome extension. If no daemon is running yet, this starts
+// one (detached), so any number of Claude apps share the same bridge.
 //
-// IMPORTANT: nothing may be written to stdout except MCP protocol frames. All logs
-// go to stderr.
+// IMPORTANT: nothing may be written to stdout except MCP protocol frames. All
+// logs go to stderr.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { WebSocketServer } from "ws";
+import { WebSocket } from "ws";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const PORT = Number(process.env.CONTROLIUM_PORT) || 8765;
 const CALL_TIMEOUT_MS = Number(process.env.CONTROLIUM_TIMEOUT_MS) || 60000;
-
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const log = (...a) => console.error("[controlium]", ...a);
 
 // --------------------------------------------------------------------------
-// WebSocket bridge to the extension
+// Connection to the shared bridge daemon (auto-spawned if absent)
 // --------------------------------------------------------------------------
 
-let extSocket = null;            // the active extension connection
-const pending = new Map();       // callId -> { resolve, reject, timer }
+let ws = null;
+let daemonStarted = false;
+const pending = new Map();   // id -> { resolve, reject, timer }
 let nextId = 1;
 
-const wss = new WebSocketServer({ host: "127.0.0.1", port: PORT });
+// Start the shared bridge daemon. Idempotent: if one already owns the port, the
+// spawned process exits immediately (EADDRINUSE).
+function startDaemon() {
+  if (daemonStarted) return;
+  daemonStarted = true;
+  try {
+    spawn(process.execPath, [join(__dirname, "bridge.js")], {
+      detached: true, stdio: "ignore",
+      env: { ...process.env, CONTROLIUM_PORT: String(PORT) },
+    }).unref();
+  } catch (_) {}
+}
 
-wss.on("listening", () => log(`WebSocket bridge listening on 127.0.0.1:${PORT}`));
-wss.on("error", (e) => {
-  if (e && e.code === "EADDRINUSE") {
-    log(`Port ${PORT} already in use — another bridge instance may be running. This MCP server will still respond, but the extension can only bind to one bridge. Set CONTROLIUM_PORT to change it.`);
-  } else {
-    log("WebSocket server error:", e && e.message);
-  }
-});
-
-wss.on("connection", (socket) => {
-  socket.on("message", (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.type === "hello" && msg.role === "extension") {
-      extSocket = socket;
-      log(`Extension connected (v${msg.version || "?"})`);
-      return;
-    }
-    if (msg.type === "pong") return;
-    if (msg.type === "result") {
-      const p = pending.get(msg.id);
+function connect() {
+  let sock;
+  try { sock = new WebSocket(`ws://127.0.0.1:${PORT}`); }
+  catch (_) { setTimeout(connect, 300); return; }
+  ws = sock;
+  sock.on("open", () => { log(`connected to bridge :${PORT}`); try { sock.send(JSON.stringify({ type: "hello", role: "mcp" })); } catch {} });
+  sock.on("message", (raw) => {
+    let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+    if (m.type === "ping") { try { sock.send(JSON.stringify({ type: "pong" })); } catch {} return; }
+    if (m.type === "result") {
+      const p = pending.get(m.id);
       if (!p) return;
       clearTimeout(p.timer);
-      pending.delete(msg.id);
-      if (msg.ok) p.resolve(msg.content);
-      else p.reject(new Error(msg.error || "tool failed in extension"));
+      pending.delete(m.id);
+      if (m.ok) p.resolve(m.content);
+      else p.reject(new Error(m.error || "tool failed"));
     }
   });
-  socket.on("close", () => {
-    if (extSocket === socket) { extSocket = null; log("Extension disconnected"); }
+  // Never let a socket error crash us; let the natural 'close' drive the retry.
+  sock.on("error", () => {});   // let the natural 'close' drive the retry
+  sock.on("close", () => {
+    if (ws === sock) ws = null;
+    startDaemon();               // make sure a daemon exists, then keep retrying
+    setTimeout(connect, 300);
   });
-  socket.on("error", () => {});
-});
+}
 
-// keepalive so the MV3 service worker's WS stays active
-setInterval(() => {
-  if (extSocket && extSocket.readyState === extSocket.OPEN) {
-    try { extSocket.send(JSON.stringify({ type: "ping" })); } catch {}
+startDaemon();
+connect();
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function callExtension(tool, args) {
+  // On cold start the daemon is still coming up; wait briefly for the connection
+  // instead of failing the first tool call.
+  const deadline = Date.now() + 10000;
+  while ((!ws || ws.readyState !== WebSocket.OPEN) && Date.now() < deadline) await sleep(150);
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    throw new Error("Not connected to the Controlium bridge. Make sure Chrome is open with the Controlium extension enabled (its toolbar dot should be green).");
   }
-}, 15000);
-
-function callExtension(tool, args) {
-  return new Promise((resolve, reject) => {
-    if (!extSocket || extSocket.readyState !== extSocket.OPEN) {
-      return reject(new Error(
-        "The Chrome extension is not connected to the bridge. Open Chrome, make sure the 'Controlium' extension is loaded and enabled, and that its port matches " + PORT + "."
-      ));
-    }
+  return await new Promise((resolve, reject) => {
     const id = nextId++;
     const timer = setTimeout(() => {
       pending.delete(id);
@@ -84,7 +93,7 @@ function callExtension(tool, args) {
     }, CALL_TIMEOUT_MS);
     pending.set(id, { resolve, reject, timer });
     try {
-      extSocket.send(JSON.stringify({ type: "call", id, tool, args }));
+      ws.send(JSON.stringify({ type: "call", id, tool, args }));
     } catch (e) {
       clearTimeout(timer);
       pending.delete(id);
@@ -245,4 +254,4 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-log(`MCP server ready. Bridge port ${PORT}. Tools: ${TOOLS.map((t) => t.name).join(", ")}`);
+log(`MCP server ready; using shared bridge on :${PORT}. Tools: ${TOOLS.map((t) => t.name).join(", ")}`);

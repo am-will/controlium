@@ -21,10 +21,13 @@ It runs in **your normal Chrome profile** (your logins, your tabs), not a throwa
 instance.
 
 ```
-Claude Code / Claude Desktop  (MCP client)
+Claude Code / Claude Desktop / Claude WORK …  (any number of MCP clients)
         │  stdio
         ▼
-mcp-server/server.js  ── MCP server + WebSocket bridge on 127.0.0.1  (8765 / 8766)
+mcp-server/server.js  (thin client; auto-starts the daemon)
+        │  WebSocket → 127.0.0.1:8765
+        ▼
+mcp-server/bridge.js  ── ONE shared daemon; owns the port + the extension link
         │  WebSocket
         ▼
 extension service worker
@@ -32,6 +35,10 @@ extension service worker
         ▼
 your Chrome tab  ──▶  brought to the FRONT, with a visible cursor
 ```
+
+Every Claude app connects to a single shared bridge daemon on port 8765, so any
+number of them coexist without fighting over the port. The daemon starts
+automatically the first time any Claude launches the MCP server.
 
 ## Quick start
 
@@ -89,16 +96,17 @@ Recent Claude Desktop builds manage `claude_desktop_config.json` themselves and 
 hand-added `mcpServers`, so install it as a **Desktop Extension** (`.mcpb`) instead:
 
 ```bash
-./scripts/build-mcpb.sh                  # produces build/controlium.mcpb (bridge on 8766)
+./scripts/build-mcpb.sh                  # produces build/controlium.mcpb
 open -a Claude build/controlium.mcpb     # opens the install dialog (macOS)
 ```
 
-Or: Claude Desktop → **Settings → Extensions → Install Extension…** → pick
-`build/controlium.mcpb`.
+Or: Claude Desktop → **Settings → Extensions → Advanced settings → Install Extension…**
+→ pick `build/controlium.mcpb`. (Use the **Extensions** section, *not* **Connectors** —
+Connectors is only for remote URL-based servers.)
 
-Claude Code uses **8765**, Claude Desktop uses **8766**, and the extension connects to
-both at once — so either app can drive the browser (one at a time). The **Bridge ports**
-field in the popup defaults to `8765, 8766`.
+Multiple Claude Desktop profiles (e.g. a separate "WORK" install) each install the same
+bundle. Everything — Claude Code and every Desktop profile — shares the one bridge daemon
+on **8765**, so there are no per-app ports to manage. Drive from one at a time.
 </details>
 
 ## Tools Claude can call
@@ -127,10 +135,10 @@ call to skip it just for that call.
 
 ## Configuration
 
-- **Bridge ports** — the extension connects to every port in its list (default
-  `8765, 8766`) on `127.0.0.1` only. Each MCP server instance binds one port via the
-  `CONTROLIUM_PORT` env var (default `8765`). Listed ports with nothing serving are just
-  retried.
+- **Bridge port** — everything shares one daemon on `127.0.0.1:8765`. The extension's
+  **Bridge ports** field defaults to `8765, 8766, 8767` (extra entries are just harmlessly
+  retried); `8765` is all you need. Override with the `CONTROLIUM_PORT` env var if 8765 is
+  taken.
 - **Bring to front** and **Synthetic cursor** — toggles in the popup/options, both on by
   default.
 
